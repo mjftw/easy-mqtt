@@ -1,15 +1,10 @@
+from typing import Callable
 import paho.mqtt.client as mqtt
 import time
 
 class MqttClient:
     ''' Listen to a given topic on an MQTT network and run a callback on recive
     Args:
-        topic (:obj:`str`): Topic branch to subscuribe to
-            in order to recieve messages.
-        on_message (function): This callaback is run when a message is recieved
-            from the MQTT broker on the subscribed topic.
-            >>> def on_message(client, userdata, message):
-                ...
         on_connect (function, optional): This callback is run on connection to
             the MQTT Broker.
             >>> def on_connect(client, userdata, flags, rc):
@@ -64,14 +59,12 @@ class MqttClient:
             thread? If false, connect(...) method is a blocking call.
             Default is True
     '''
-    def __init__(self, topic, on_message, on_connect=None, on_disconnect=None,
+    def __init__(self, on_connect=None, on_disconnect=None,
                  broker_host=None, broker_port=None, client_id=None,
                  username=None, password=None,
                  birth_message=None, will_message=None, threaded=None):
-        self.topic = topic
 
-        assert callable(on_message)
-        self.on_message = on_message
+        self._subscribe_topics = {}
 
         if on_connect:
             assert callable(on_connect)
@@ -158,6 +151,33 @@ class MqttClient:
             self._client.disconnect()
         self._client = None
 
+    def subscribe(self, topic: str, callback: Callable[[str], None], qos: int = 0):
+        '''Listen to a topic and call the callback with any messages received.
+
+        Args:
+            * topic (:obj:`str`): Topic branch to subscuribe to in order to
+                recieve messages.
+            * qos (int): QoS value to use. Should be 0, 1, or 2
+            * callback (function): This callaback is run when a message is
+                recieved from the MQTT broker on the subscribed topic.
+            >>> def my_callback(client, userdata, message):
+                ...
+        '''
+        self._client.subscribe(topic, qos)
+        self._subscribe_topics[topic] = callback
+
+    def unsubscribe(self, topic: str):
+        '''Listen to a topic and call the callback with any messages received'''
+        if topic in self._subscribe_topics:
+            self._client.unsubscribe(topic)
+            del self._subscribe_topics[topic]
+
+    def publish(self, topic: str, message: str):
+        '''Publish a message to a topic. Connects to client if not connected'''
+        if not self._connected:
+            self.connect()
+        self._client.publish(topic, message)
+
     def _start_client(self):
         self._client = mqtt.Client(
             client_id=self.client_id
@@ -165,7 +185,7 @@ class MqttClient:
 
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
-        self._client.on_message = self.on_message
+        self._client.on_message = self._on_message
 
         if self.will_message:
             self._client.will_set(
@@ -200,7 +220,9 @@ class MqttClient:
             time.sleep(0.1)
             seconds_passed += 0.1
 
-        self._client.subscribe(self.topic, 2)
+    def _on_message(self, client, userdata, message):
+        if message.topic in self._subscribe_topics:
+            self._subscribe_topics[message.topic](client, userdata, message)
 
     def _on_connect(self, *args, **kwargs):
         self._connected = True
@@ -222,10 +244,3 @@ class MqttClient:
         if self.on_disconnect:
             self.on_disconnect(*args, **kwargs)
 
-
-def get_mac_address():
-    ''' Helper function to get MAC address of machine and format it nicely '''
-    import uuid
-    import re
-
-    return ':'.join(re.findall('..', '%012x' % uuid.getnode()))
